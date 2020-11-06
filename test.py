@@ -3,9 +3,9 @@ import json
 
 from torch.utils.data import DataLoader
 
-from models import *
-from utils.datasets import *
-from utils.utils import *
+from .models import *
+from .utils.datasets import *
+from .utils.utils import *
 
 
 def test(cfg,
