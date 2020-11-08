@@ -1,3 +1,4 @@
+from torch.nn.modules import module
 from .utils.google_utils import *
 from .utils.layers import *
 from .utils.parse_config import *
@@ -7,14 +8,12 @@ ONNX_EXPORT = False
 
 def create_modules(module_defs, img_size, cfg):
     # Constructs module list of layer blocks from module configuration in module_defs
-
     img_size = [img_size] * 2 if isinstance(img_size, int) else img_size  # expand if necessary
-    _ = module_defs.pop(0)  # cfg training hyperparams (unused)
-    output_filters = [3]  # input channels
+    hyps = module_defs.pop(0)  # cfg training hyperparams (unused, more or less)
+    output_filters = [hyps.get('in_channels', 3)] # input channels
     module_list = nn.ModuleList()
     routs = []  # list of layers which rout to deeper layers
     yolo_index = -1
-
     for i, mdef in enumerate(module_defs):
         modules = nn.Sequential()
 
@@ -84,7 +83,7 @@ def create_modules(module_defs, img_size, cfg):
         elif mdef['type'] == 'shortcut':  # nn.Sequential() placeholder for 'shortcut' layer
             layers = mdef['from']
             filters = output_filters[-1]
-            routs.extend([i + l if l < 0 else l for l in layers])
+            routs.extend([i + l if l < 0 else l for l in layers if type(l) != str])
             modules = WeightedFeatureFusion(layers=layers, weight='weights_type' in mdef)
 
         elif mdef['type'] == 'reorg3d':  # yolov3-spp-pan-scale
@@ -238,10 +237,9 @@ class Darknet(nn.Module):
         self.seen = np.array([0], dtype=np.int64)  # (int64) number of images seen during training
         self.info(verbose) if not ONNX_EXPORT else None  # print model description
 
-    def forward(self, x, augment=False, verbose=False):
-
+    def forward(self, x, extractor_output=None, augment=False, verbose=False):
         if not augment:
-            return self.forward_once(x)
+            return self.forward_once(x, extractor_output, verbose=verbose)
         else:  # Augment images (inference and test only) https://github.com/ultralytics/yolov3/issues/931
             img_size = x.shape[-2:]  # height, width
             s = [0.83, 0.67]  # scales
@@ -251,7 +249,7 @@ class Darknet(nn.Module):
                                     torch_utils.scale_img(x, s[1], same_shape=False),  # scale
                                     )):
                 # cv2.imwrite('img%g.jpg' % i, 255 * xi[0].numpy().transpose((1, 2, 0))[:, :, ::-1])
-                y.append(self.forward_once(xi)[0])
+                y.append(self.forward_once(xi, extractor_output)[0])
 
             y[1][..., :4] /= s[0]  # scale
             y[1][..., 0] = img_size[1] - y[1][..., 0]  # flip lr
@@ -268,7 +266,7 @@ class Darknet(nn.Module):
             y = torch.cat(y, 1)
             return y, None
 
-    def forward_once(self, x, augment=False, verbose=False):
+    def forward_once(self, x, extractor_output, augment=False, verbose=False):
         img_size = x.shape[-2:]  # height, width
         yolo_out, out = [], []
         if verbose:
@@ -289,9 +287,13 @@ class Darknet(nn.Module):
             if name in ['WeightedFeatureFusion', 'FeatureConcat']:  # sum, concat
                 if verbose:
                     l = [i - 1] + module.layers  # layers
-                    sh = [list(x.shape)] + [list(out[i].shape) for i in module.layers]  # shapes
-                    str = ' >> ' + ' + '.join(['layer %g %s' % x for x in zip(l, sh)])
-                x = module(x, out)  # WeightedFeatureFusion(), FeatureConcat()
+                    sh = [list(x.shape)] + [list(out[i].shape) if type(i) == int else i for i in module.layers]  # shapes
+                    str = ' >> ' + ' + '.join(['layer %s %s' % x for x in zip(l, sh)])
+
+                if name == 'WeightedFeatureFusion':
+                    x = module(x, out, extractor_output) # weighted feature fusion
+                else:
+                    x = module(x, out) # FeatureConcat()
             elif name == 'YOLOLayer':
                 yolo_out.append(module(x, out))
             else:  # run module directly, i.e. mtype = 'convolutional', 'upsample', 'maxpool', 'batchnorm2d' etc.

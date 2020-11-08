@@ -44,7 +44,7 @@ class WeightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers http
         if weight:
             self.w = nn.Parameter(torch.zeros(self.n), requires_grad=True)  # layer weights
 
-    def forward(self, x, outputs):
+    def forward(self, x, outputs, extractor_output):
         # Weights
         if self.weight:
             w = torch.sigmoid(self.w) * (2 / self.n)  # sigmoid weights (0-1)
@@ -53,7 +53,10 @@ class WeightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers http
         # Fusion
         nx = x.shape[1]  # input channels
         for i in range(self.n - 1):
-            a = outputs[self.layers[i]] * w[i + 1] if self.weight else outputs[self.layers[i]]  # feature to add
+            if self.layers[i] == "extractor_output":
+                a = extractor_output * w[i + 1] if self.weight else extractor_output  # feature to add
+            else:
+                a = outputs[self.layers[i]] * w[i + 1] if self.weight else outputs[self.layers[i]]  # feature to add
             na = a.shape[1]  # feature channels
 
             # Adjust channels
