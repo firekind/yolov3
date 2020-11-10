@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import numpy as np
 
@@ -66,6 +67,8 @@ def parse_data_cfg(path):
         if line == '' or line.startswith('#'):
             continue
         key, val = line.split('=')
-        options[key.strip()] = val.strip()
+        val = val.strip()
+        val = val.replace("./", str(Path(path).parent) + os.sep) if val.startswith('./') else val
+        options[key.strip()] = val
 
     return options

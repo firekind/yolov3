@@ -258,7 +258,7 @@ class LoadStreams:  # multiple IP or RTSP cameras
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=416, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, pad=0.0):
+                 cache_images=False, single_cls=False, pad=0.0, mosiac=True):
         try:
             path = str(Path(path))  # os-agnostic
             parent = str(Path(path).parent) + os.sep
@@ -286,7 +286,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.hyp = hyp
         self.image_weights = image_weights
         self.rect = False if image_weights else rect
-        self.mosaic = self.augment and not self.rect  # load 4 images at a time into a mosaic (only during training)
+        self.mosaic = self.augment and not self.rect and mosiac  # load 4 images at a time into a mosaic (only during training)
 
         # Define labels
         self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt')
@@ -329,7 +329,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
         # Cache labels
         self.imgs = [None] * n
-        self.labels = [np.zeros((0, 5), dtype=np.float32)] * n
+        self.yolo_labels = [np.zeros((0, 5), dtype=np.float32)] * n
         create_datasubset, extract_bounding_boxes, labels_loaded = False, False, False
         nm, nf, ne, ns, nd = 0, 0, 0, 0, 0  # number missing, found, empty, datasubset, duplicate
         np_labels_path = str(Path(self.label_files[0]).parent) + '.npy'  # saved labels in *.npy file
@@ -337,7 +337,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             s = np_labels_path  # print string
             x = np.load(np_labels_path, allow_pickle=True)
             if len(x) == n:
-                self.labels = x
+                self.yolo_labels = x
                 labels_loaded = True
         else:
             s = path.replace('images', 'labels')
@@ -345,7 +345,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         pbar = tqdm(self.label_files)
         for i, file in enumerate(pbar):
             if labels_loaded:
-                l = self.labels[i]
+                l = self.yolo_labels[i]
                 # np.savetxt(file, l, '%g')  # save *.txt from *.npy file
             else:
                 try:
@@ -363,7 +363,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
                     nd += 1  # print('WARNING: duplicate rows in %s' % self.label_files[i])  # duplicate rows
                 if single_cls:
                     l[:, 0] = 0  # force dataset into single-class mode
-                self.labels[i] = l
+                self.yolo_labels[i] = l
                 nf += 1  # file found
 
                 # Create subdataset (a smaller dataset)
@@ -405,7 +405,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         assert nf > 0 or n == 20288, 'No labels found in %s. See %s' % (os.path.dirname(file) + os.sep, help_url)
         if not labels_loaded and n > 1000:
             print('Saving labels to %s for faster future loading' % np_labels_path)
-            np.save(np_labels_path, self.labels)  # save for next time
+            np.save(np_labels_path, self.yolo_labels)  # save for next time
 
         # Cache images into memory for faster training (WARNING: large datasets may exceed system RAM)
         if cache_images:  # if training
@@ -457,7 +457,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
 
             # Load labels
             labels = []
-            x = self.labels[index]
+            x = self.yolo_labels[index]
             if x.size > 0:
                 # Normalized xywh to pixel xyxy format
                 labels = x.copy()
@@ -519,9 +519,14 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
     @staticmethod
     def collate_fn(batch):
         img, label, path, shapes = zip(*batch)  # transposed
+        print(len(path))
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
         return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+
+    @property
+    def labels(self):
+        return self.yolo_labels
 
 
 def load_image(self, index):
@@ -566,7 +571,7 @@ def load_mosaic(self, index):
     labels4 = []
     s = self.img_size
     xc, yc = [int(random.uniform(s * 0.5, s * 1.5)) for _ in range(2)]  # mosaic center x, y
-    indices = [index] + [random.randint(0, len(self.labels) - 1) for _ in range(3)]  # 3 additional image indices
+    indices = [index] + [random.randint(0, len(self.yolo_labels) - 1) for _ in range(3)]  # 3 additional image indices
     for i, index in enumerate(indices):
         # Load image
         img, _, (h, w) = load_image(self, index)
@@ -591,7 +596,7 @@ def load_mosaic(self, index):
         padh = y1a - y1b
 
         # Labels
-        x = self.labels[index]
+        x = self.yolo_labels[index]
         labels = x.copy()
         if x.size > 0:  # Normalized xywh to pixel xyxy format
             labels[:, 1] = w * (x[:, 1] - x[:, 3] / 2) + padw

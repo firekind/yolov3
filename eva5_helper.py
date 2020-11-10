@@ -51,6 +51,8 @@ class YoloTrainer:
     def pre_train_step(self, batch, batch_idx, epoch):
         imgs, _, _, _ = batch
         ni = self.calc_ni(batch_idx, epoch)  # number integrated batches (since train start)
+        if imgs.dtype == torch.uint8:
+            imgs = imgs.float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
 
         # Burn-in
         if ni <= self.n_burn:
@@ -103,7 +105,7 @@ class YoloTrainer:
         inf_out, train_out = outputs
         whwh = torch.Tensor([width, height, width, height]).to(imgs.device)
 
-        loss = compute_loss(train_out, targets)[1][:3]  # GIoU, obj, cls
+        losses = compute_loss(train_out, targets, self.model)[1][:3]  # GIoU, obj, cls
         output = non_max_suppression(inf_out, conf_thres=opt.conf_thres, iou_thres=opt.iou_thres, multi_label=self.calc_ni(batch_idx, epoch) > self.n_burn)
 
         # Statistics per image
@@ -146,7 +148,7 @@ class YoloTrainer:
                         ious, i = box_iou(pred[pi, :4], tbox[ti]).max(1)  # best ious, indices
 
                         # Append detections
-                        for j in (ious > self.iouv[0]).nonzero():
+                        for j in (ious > self.iouv[0].to(ious.device)).nonzero():
                             d = ti[i[j]]  # detected target
                             if d not in detected:
                                 detected.append(d)
@@ -156,7 +158,7 @@ class YoloTrainer:
 
             # Append statistics (correct, conf, pcls, tcls)
             self.stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
-            return loss
+        return losses
 
     def validation_epoch_end(self):
         stats = [np.concatenate(x, 0) for x in zip(*self.stats)]  # to numpy
