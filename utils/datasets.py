@@ -258,14 +258,16 @@ class LoadStreams:  # multiple IP or RTSP cameras
 
 class LoadImagesAndLabels(Dataset):  # for training/testing
     def __init__(self, path, img_size=416, batch_size=16, augment=False, hyp=None, rect=False, image_weights=False,
-                 cache_images=False, single_cls=False, pad=0.0, mosiac=True):
+                 cache_images=False, single_cls=False, pad=0.0, mosiac=True, label_files_path=None):
         try:
             path = str(Path(path))  # os-agnostic
             parent = str(Path(path).parent) + os.sep
+            parents_parent = str(Path(path).parent.parent) + os.sep
             if os.path.isfile(path):  # file
                 with open(path, 'r') as f:
                     f = f.read().splitlines()
                     f = [x.replace('./', parent) if x.startswith('./') else x for x in f]  # local to global path
+                    f = [x.replace('../', parents_parent) if x.startswith('../') else x for x in f]  # local to global path
             elif os.path.isdir(path):  # folder
                 f = glob.iglob(path + os.sep + '*.*')
             else:
@@ -289,8 +291,12 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         self.mosaic = self.augment and not self.rect and mosiac  # load 4 images at a time into a mosaic (only during training)
 
         # Define labels
-        self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt')
-                            for x in self.img_files]
+        if label_files_path is None:
+            self.label_files = [x.replace('images', 'labels').replace(os.path.splitext(x)[-1], '.txt')
+                                for x in self.img_files]
+        else:
+            self.label_files = [os.path.join(label_files_path, os.path.splitext(os.path.basename(x))[0] + ".txt")
+                                for x in self.img_files]
 
         # Read image shapes (wh)
         sp = path.replace('.txt', '') + '.shapes'  # shapefile path
