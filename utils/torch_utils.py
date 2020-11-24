@@ -184,6 +184,7 @@ class ModelEMA:
 
             for k, v in esd.items():
                 if v.dtype.is_floating_point:
+                    v = v.to(msd[k].device)
                     v *= d
                     v += (1. - d) * msd[k].detach()
 

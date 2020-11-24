@@ -8,11 +8,11 @@ from .utils.utils import compute_loss, non_max_suppression, clip_coords, xywh2xy
 from .utils.torch_utils import ModelEMA
 
 class YoloTrainer:
-    def __init__(self, model, optimizer, hyp, opt, nb, nc):
+    def __init__(self, model, hyp, opt, nb, nc):
         self.nb = nb
         self.nc = nc
         self.n_burn = max(3 * nb, 500)
-        self.optimizer = optimizer
+        self.optimizer = None
         self.model = model
         self.batch_size = opt.batch_size
         self.accumulate = max(round(64 / opt.batch_size), 1) 
@@ -49,7 +49,10 @@ class YoloTrainer:
 
 
     def pre_train_step(self, batch, batch_idx, epoch):
-        imgs, _, _, _ = batch
+        if self.optimizer is None:
+            raise Exception("Set optimizer for the yolo trainer.")
+
+        imgs, _, _, _, _ = batch
         ni = self.calc_ni(batch_idx, epoch)  # number integrated batches (since train start)
         if imgs.dtype == torch.uint8:
             imgs = imgs.float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
@@ -78,7 +81,7 @@ class YoloTrainer:
         return imgs
 
     def post_train_step(self, outputs, batch, batch_idx, epoch):
-        _, targets, _, _ = batch
+        _, targets, _, _, _ = batch
         # Loss
         loss, loss_items = compute_loss(outputs, targets, self.model)
         if not torch.isfinite(loss):
@@ -100,7 +103,7 @@ class YoloTrainer:
         self.stats = []
 
     def validation_step(self, opt, outputs, batch, batch_idx, epoch):
-        imgs, targets, paths, shapes = batch
+        imgs, targets, paths, shapes, pad = batch
         _, _, height, width = imgs.shape
         inf_out, train_out = outputs
         whwh = torch.Tensor([width, height, width, height]).to(imgs.device)
@@ -177,3 +180,6 @@ class YoloTrainer:
 
     def calc_ni(self, batch_idx, epoch):
         return batch_idx + self.nb * epoch
+
+    def set_optimizer(self, optimizer):
+        self.optimizer = optimizer

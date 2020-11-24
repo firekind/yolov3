@@ -451,7 +451,7 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
             # Load mosaic
             img, labels = load_mosaic(self, index)
             shapes = None
-
+            pad = None
         else:
             # Load image
             img, (h0, w0), (h, w) = load_image(self, index)
@@ -520,15 +520,14 @@ class LoadImagesAndLabels(Dataset):  # for training/testing
         img = img[:, :, ::-1].transpose(2, 0, 1)  # BGR to RGB, to 3x416x416
         img = np.ascontiguousarray(img)
 
-        return torch.from_numpy(img), labels_out, self.img_files[index], shapes
+        return torch.from_numpy(img), labels_out, self.img_files[index], shapes, pad
 
     @staticmethod
     def collate_fn(batch):
-        img, label, path, shapes = zip(*batch)  # transposed
-        print(len(path))
+        img, label, path, shapes, pad = zip(*batch)  # transposed
         for i, l in enumerate(label):
             l[:, 0] = i  # add target image index for build_targets()
-        return torch.stack(img, 0), torch.cat(label, 0), path, shapes
+        return torch.stack(img, 0), torch.cat(label, 0), path, shapes, pad
 
     @property
     def labels(self):
