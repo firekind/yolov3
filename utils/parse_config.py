@@ -53,7 +53,7 @@ def parse_model_cfg(path):
     return mdefs
 
 
-def parse_data_cfg(path):
+def parse_data_cfg_bck(path):
     # Parses the data configuration file
     if not os.path.exists(path) and os.path.exists('data' + os.sep + path):  # add data/ prefix if omitted
         path = 'data' + os.sep + path
@@ -69,6 +69,29 @@ def parse_data_cfg(path):
         key, val = line.split('=')
         val = val.strip()
         val = val.replace("./", str(Path(path).parent) + os.sep) if val.startswith('./') else val
+        options[key.strip()] = val
+
+    return options
+
+
+def parse_data_cfg(path):
+    # Parses the data configuration file
+    with open(path, 'r') as f:
+        lines = f.readlines()
+
+    options = dict()
+    for line in lines:
+        line = line.strip()
+        if line == '' or line.startswith('#'):
+            continue
+        key, val = line.split('=')
+        val = val.strip()
+
+        if val.startswith('./'):
+            val = val.replace("./", str(Path(path).parent) + os.sep)
+        elif val.startswith('../'):
+            val = val.replace("../", str(Path(os.path.abspath(path)).parent.parent) + os.sep)
+
         options[key.strip()] = val
 
     return options
