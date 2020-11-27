@@ -1,4 +1,5 @@
 import argparse
+from eva5_helper import YoloTrainer
 
 import torch.distributed as dist
 import torch.optim as optim
@@ -64,15 +65,15 @@ def train(hyp):
     imgsz_min, imgsz_max, imgsz_test = opt.img_size  # img sizes (min, max, test)
 
     # Image Sizes
-    gs = 32  # (pixels) grid size
-    assert math.fmod(imgsz_min, gs) == 0, '--img-size %g must be a %g-multiple' % (imgsz_min, gs)
-    opt.multi_scale |= imgsz_min != imgsz_max  # multi if different (min, max)
-    if opt.multi_scale:
-        if imgsz_min == imgsz_max:
-            imgsz_min //= 1.5
-            imgsz_max //= 0.667
-        grid_min, grid_max = imgsz_min // gs, imgsz_max // gs
-        imgsz_min, imgsz_max = int(grid_min * gs), int(grid_max * gs)
+    # gs = 32  # (pixels) grid size
+    # assert math.fmod(imgsz_min, gs) == 0, '--img-size %g must be a %g-multiple' % (imgsz_min, gs)
+    # opt.multi_scale |= imgsz_min != imgsz_max  # multi if different (min, max)
+    # if opt.multi_scale:
+    #     if imgsz_min == imgsz_max:
+    #         imgsz_min //= 1.5
+    #         imgsz_max //= 0.667
+    #     grid_min, grid_max = imgsz_min // gs, imgsz_max // gs
+    #     imgsz_min, imgsz_max = int(grid_min * gs), int(grid_max * gs)
     img_size = imgsz_max  # initialize with max size
 
     # Configure run
@@ -237,6 +238,10 @@ def train(hyp):
     # torch.autograd.set_detect_anomaly(True)
     results = (0, 0, 0, 0, 0, 0, 0)  # 'P', 'R', 'mAP', 'F1', 'val GIoU', 'val Objectness', 'val Classification'
     t0 = time.time()
+
+    trainer = YoloTrainer(model, hyp, opt, nb, nc)
+    trainer.set_optimizer(optimizer)
+
     print('Image sizes %g - %g train, %g test' % (imgsz_min, imgsz_max, imgsz_test))
     print('Using %g dataloader workers' % nw)
     print('Starting training for %g epochs...' % epochs)
@@ -252,43 +257,38 @@ def train(hyp):
         mloss = torch.zeros(4).to(device)  # mean losses
         print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
         pbar = tqdm(enumerate(dataloader), total=nb)  # progress bar
-        for i, (imgs, targets, paths, _, _) in pbar:  # batch -------------------------------------------------------------
+        for i, (imgs, targets, paths, shapes, pad) in pbar:  # batch -------------------------------------------------------------
             ni = i + nb * epoch  # number integrated batches (since train start)
             imgs = imgs.to(device).float() / 255.0  # uint8 to float32, 0 - 255 to 0.0 - 1.0
             targets = targets.to(device)
 
-            # Burn-in
-            if ni <= n_burn:
-                xi = [0, n_burn]  # x interp
-                model.gr = np.interp(ni, xi, [0.0, 1.0])  # giou loss ratio (obj_loss = 1.0 or giou)
-                accumulate = max(1, np.interp(ni, xi, [1, 64 / batch_size]).round())
-                for j, x in enumerate(optimizer.param_groups):
-                    # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
-                    x['lr'] = np.interp(ni, xi, [0.1 if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
-                    x['weight_decay'] = np.interp(ni, xi, [0.0, hyp['weight_decay'] if j == 1 else 0.0])
-                    if 'momentum' in x:
-                        x['momentum'] = np.interp(ni, xi, [0.9, hyp['momentum']])
+            # # Burn-in
+            # if ni <= n_burn:
+            #     xi = [0, n_burn]  # x interp
+            #     model.gr = np.interp(ni, xi, [0.0, 1.0])  # giou loss ratio (obj_loss = 1.0 or giou)
+            #     accumulate = max(1, np.interp(ni, xi, [1, 64 / batch_size]).round())
+            #     for j, x in enumerate(optimizer.param_groups):
+            #         # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+            #         x['lr'] = np.interp(ni, xi, [0.1 if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
+            #         x['weight_decay'] = np.interp(ni, xi, [0.0, hyp['weight_decay'] if j == 1 else 0.0])
+            #         if 'momentum' in x:
+            #             x['momentum'] = np.interp(ni, xi, [0.9, hyp['momentum']])
 
-            # Multi-Scale
-            if opt.multi_scale:
-                if ni / accumulate % 1 == 0:  #  adjust img_size (67% - 150%) every 1 batch
-                    img_size = random.randrange(grid_min, grid_max + 1) * gs
-                sf = img_size / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to 32-multiple)
-                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+            # # Multi-Scale
+            # if opt.multi_scale:
+            #     if ni / accumulate % 1 == 0:  #  adjust img_size (67% - 150%) every 1 batch
+            #         img_size = random.randrange(grid_min, grid_max + 1) * gs
+            #     sf = img_size / max(imgs.shape[2:])  # scale factor
+            #     if sf != 1:
+            #         ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to 32-multiple)
+            #         imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
+            trainer.pre_train_step((imgs, targets, paths, shapes, pad), i, epoch)
 
             # Forward
             pred = model(imgs)
 
-            # Loss
-            loss, loss_items = compute_loss(pred, targets, model)
-            if not torch.isfinite(loss):
-                print('WARNING: non-finite loss, ending training ', loss_items)
-                return results
+            loss, loss_items = trainer.post_train_step(pred, (imgs, targets, paths, shapes, pad), i, epoch)
 
-            # Backward
-            loss *= batch_size / 64  # scale loss
             if mixed_precision:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
                     scaled_loss.backward()
@@ -299,7 +299,7 @@ def train(hyp):
             if ni % accumulate == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                ema.update(model)
+                # ema.update(model)
 
             # Print
             mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
