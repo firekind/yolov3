@@ -5,7 +5,6 @@ import numpy as np
 import torch.nn.functional as F
 import torch
 from .utils.utils import compute_loss, non_max_suppression, clip_coords, xywh2xyxy, box_iou, ap_per_class
-from .utils.torch_utils import ModelEMA
 
 class YoloTrainer:
     def __init__(self, model, hyp, opt, nb, nc):
@@ -29,8 +28,6 @@ class YoloTrainer:
         self.img_size = imgsz_max
 
         hyp['cls'] *= nc / 80  # update coco-tuned hyp['cls'] to current dataset
-
-        self.ema = ModelEMA(model)
 
         self.hyp = hyp
         self.opt = opt
@@ -82,6 +79,7 @@ class YoloTrainer:
 
     def post_train_step(self, outputs, batch, batch_idx, epoch):
         _, targets, _, _, _ = batch
+       
         # Loss
         loss, loss_items = compute_loss(outputs, targets, self.model)
         if not torch.isfinite(loss):
@@ -90,13 +88,7 @@ class YoloTrainer:
 
         loss *= self.batch_size / 64  # scale loss
 
-        if self.calc_ni(batch_idx, epoch) % self.accumulate == 0:
-            self.ema.update(self.model)
-
-        return loss
-
-    def train_epoch_end(self):
-        self.ema.update_attr(self.model)
+        return loss, loss_items
 
     def validation_epoch_start(self):
         self.seen = 0
@@ -105,6 +97,7 @@ class YoloTrainer:
     def validation_step(self, opt, outputs, batch, batch_idx, epoch):
         imgs, targets, paths, shapes, pad = batch
         _, _, height, width = imgs.shape
+        
         inf_out, train_out = outputs
         whwh = torch.Tensor([width, height, width, height]).to(imgs.device)
 
